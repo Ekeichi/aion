@@ -47,8 +47,8 @@ class Config:
     TAU = 1  # Predict tau days ahead (default: next day)
 
     # Data generation (synthetic)
-    NUM_ATHLETES = 10
-    NUM_DAYS_PER_ATHLETE = 180  # 6 months of data
+    NUM_ATHLETES = 100  # More athletes for better training
+    NUM_DAYS_PER_ATHLETE = 365  # 1 year of data per athlete
 
     # Paths
     DATA_DIR = './data'
