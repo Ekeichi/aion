@@ -5,7 +5,7 @@ Main model combining encoders and predictor with stop-gradient mechanism
 
 import torch
 import torch.nn as nn
-from encoders import ContextEncoder, ActionEncoder, TargetEncoder
+from encoders import ContextEncoder, ActionEncoder
 
 
 class Predictor(nn.Module):
@@ -89,16 +89,21 @@ class JEPAModel(nn.Module):
             dropout=config.ENC_ACTION_DROPOUT
         )
 
-        # Target encoder (MLP for single timestep)
-        self.enc_y = TargetEncoder(
+        # Target encoder: EMA copy of enc_x (same architecture, no grad updates)
+        # This prevents representation collapse — target always slightly leads predictor
+        self.enc_y = ContextEncoder(
             num_features=config.NUM_FEATURES,
             enc_dim=config.ENC_Y_DIM,
             nhead=config.ENC_Y_NHEAD,
             num_layers=config.ENC_Y_LAYERS,
             dim_feedforward=config.ENC_Y_DIM_FEEDFORWARD,
-            dropout=config.ENC_Y_DROPOUT,
-            single_timestep=True  # Predict single day ahead
+            dropout=0.0,  # No dropout in EMA target encoder
+            max_len=config.WINDOW_LENGTH * 2
         )
+        # Initialize enc_y as a copy of enc_x and freeze gradients
+        for param_y, param_x in zip(self.enc_y.parameters(), self.enc_x.parameters()):
+            param_y.data.copy_(param_x.data)
+            param_y.requires_grad = False
 
         # Predictor (Deep MLP)
         self.predictor = Predictor(
@@ -117,15 +122,21 @@ class JEPAModel(nn.Module):
         """Encode action"""
         return self.enc_action(a_t)
 
+    @torch.no_grad()
+    def update_ema_target(self, momentum=0.996):
+        """Update target encoder via EMA of online encoder. Call after each optimizer step."""
+        for param_y, param_x in zip(self.enc_y.parameters(), self.enc_x.parameters()):
+            param_y.data.mul_(momentum).add_(param_x.data, alpha=1 - momentum)
+
     def encode_target(self, y_t, stop_grad=True):
         """
-        Encode target with optional stop-gradient
-        This is the key to JEPA: target encoder is not updated via prediction loss
+        Encode target using EMA target encoder (no gradients by design).
+        y_t: (batch, num_features) -> treated as single-timestep sequence.
         """
-        s_y = self.enc_y(y_t)
-        if stop_grad:
-            s_y = s_y.detach()  # Stop gradient!
-        return s_y
+        # Feed as (batch, 1, num_features) to reuse ContextEncoder
+        s_y = self.enc_y(y_t.unsqueeze(1))
+        # enc_y has requires_grad=False, but detach anyway for safety
+        return s_y.detach()
 
     def predict(self, s_x, e_a):
         """Predict target embedding from context and action"""

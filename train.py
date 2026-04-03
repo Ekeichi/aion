@@ -39,6 +39,9 @@ def train_epoch(model, loader, optimizer, device, epoch):
         loss.backward()
         optimizer.step()
 
+        # Update EMA target encoder (prevents representation collapse)
+        model.update_ema_target(momentum=0.996)
+
         # Track loss
         total_loss += loss.item()
         num_batches += 1
